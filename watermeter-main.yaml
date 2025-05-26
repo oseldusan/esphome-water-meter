@@ -1,0 +1,187 @@
+substitutions:
+  device_name: watermeter-main  #change
+  friendly_name: "Watermeter main" #change
+  comment: Counting water rate at house
+  pin: GPIO13 #change PIN where you connect contact from watermeter 
+
+# Global variable to store total
+globals:
+  - id: accumulated_total_m3
+    type: float
+    initial_value: '0.0'
+    restore_value: true
+  - id: raw_pulses_at_last_save
+    type: float
+    initial_value: '0.0'
+    restore_value: true
+  - id: temp_target_total_m3 # New global to hold the value from the number input
+    type: float
+    initial_value: '0.0'
+    # No restore_value needed, it's a temporary holder for HA input
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  comment: ${comment}
+    
+esp32:
+  board: esp32doit-devkit-v1
+ 
+# Enable logging
+logger:
+  #level: DEBUG
+  
+# Enable Home Assistant API
+api:
+  services:
+    - service: set_water_total_m3
+      variables:
+        new_value: float
+      then:
+        - globals.set:
+            id: accumulated_total_m3
+            value: !lambda 'return new_value;' 
+
+ota:
+  - platform: esphome
+
+# Enable wifi   
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  domain: !secret domain
+# set manual IP
+  manual_ip:
+   static_ip: 192.168.3.208 # XXX
+   gateway: 192.168.3.254 # XXX
+   subnet: 255.255.255.0 # XXX
+
+# enable Web server
+# web_server:
+#  port: 80
+
+# Number input that appears in Home Assistant
+number:
+  - platform: template
+    name: "Water Meter Target Total"
+    id: water_target_total_input
+    optimistic: true
+    min_value: 0.0
+    max_value: 99999.0 # Adjust as needed
+    step: 0.001
+    set_action:
+      then:
+        - globals.set:
+            id: temp_target_total_m3
+            value: !lambda 'return x;' # 'x' is the value set from HA
+
+# Button to apply the value from the number input to the actual total
+button:
+  - platform: template
+    name: "Apply Target Total to Water Meter"
+    id: apply_target_total_button
+    on_press:
+      then:
+        - globals.set:
+            id: accumulated_total_m3
+            value: !lambda 'return id(temp_target_total_m3);'
+        - logger.log: "Applied new target total to accumulated_total_m3 from temp_target_total_m3"
+
+time:
+  - platform: homeassistant
+    id: local_time
+
+# Show some diagnostic data at HA
+text_sensor:
+  - platform: version
+    name: $friendly_name ESPHome Version
+  - platform: wifi_info
+    ip_address:
+      name: $friendly_name  IP
+    ssid:
+      name: $friendly_name  SSID
+    mac_address:
+      name: $friendly_name  Mac Address
+  - platform: template
+    name: $friendly_name Uptime
+    id: uptime_human
+    icon: mdi:clock-start  
+
+# Human readable Uptime
+sensor:
+  - platform: internal_temperature
+    name: "Internal Temperature"
+    update_interval: 60s
+  - platform: uptime
+    name: $friendly_name Uptime
+    id: uptime_sensor
+    update_interval: 60s
+    internal: true
+    on_raw_value:
+      then:
+        - text_sensor.template.publish:
+            id: uptime_human
+            # Custom C++ code to generate the result
+            state: !lambda |-
+              int seconds = round(id(uptime_sensor).raw_state);
+              int days = seconds / (24 * 3600);
+              seconds = seconds % (24 * 3600);
+              int hours = seconds / 3600;
+              seconds = seconds % 3600;
+              int minutes = seconds /  60;
+              seconds = seconds % 60;
+              return (
+                (days ? to_string(days) + "d " : "") +
+                (hours ? to_string(hours) + "h " : "") +
+                (minutes ? to_string(minutes) + "m " : "") +
+                (to_string(seconds) + "s")
+              ).c_str();  
+  - platform: wifi_signal
+    name: $friendly_name WiFi Signal
+
+## Count water from watermeter
+## connect contact between GPIO and GND
+  - platform: pulse_counter
+    pin:
+      number: ${pin}
+      inverted: true
+      mode:
+        input: true
+        pullup: true
+    update_interval: 5s
+    unit_of_measurement: "l/min"
+    name: "Rate"
+    id: rate
+    accuracy_decimals: 1
+    filters: 
+      - multiply: 1 
+    total:
+      name: "Total water consumption"
+      unit_of_measurement: "m³"
+      device_class: water
+      state_class: total_increasing
+      accuracy_decimals: 3
+      filters:
+        # This lambda receives the RAW pulse count from the pulse_meter core
+        - lambda: |-
+            float current_raw_pulse_count = x; // 'x' is the current total pulses from the meter hardware
+            float pulses_increment;
+
+            if (current_raw_pulse_count < id(raw_pulses_at_last_save)) {
+              // This means the pulse_meter's internal counter has reset.
+              // All 'current_raw_pulse_count' are new pulses since the reset.
+              pulses_increment = current_raw_pulse_count;
+            } else {
+              // Normal increment or first run where raw_pulses_at_last_save is 0.
+              pulses_increment = current_raw_pulse_count - id(raw_pulses_at_last_save);
+            }
+
+            // Add the increment (converted to m³) to the global accumulated total.
+            id(accumulated_total_m3) += pulses_increment / 1000.0;
+
+            // Store the current raw pulse count for the next calculation.
+            id(raw_pulses_at_last_save) = current_raw_pulse_count;
+
+            // Return the new grand total in m³.
+            return id(accumulated_total_m3);
+
