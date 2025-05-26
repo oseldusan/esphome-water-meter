@@ -71,6 +71,9 @@ Follow these instructions to set up and run the Watermeter project.
 * Basic understanding of electronics and microcontrollers.
 * Basic understanding of ESPHome.
 
+### Hardware
+* Thats easy part. Just connect your pulse module directly to ESP32 board . Green wire to GND on ESP32 , brown wire e.g. to G13  
+
 ### Installation
 
 1.  Install HomeAsistant
