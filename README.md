@@ -10,6 +10,7 @@
 * [Software Requirements](#software-requirements)
 * [Getting Started](#getting-started)
     * [Prerequisites](#prerequisites)
+    * [Hardware](#hardware)
     * [Installation](#installation)
     * [Configuration](#configuration)
 * [Usage](#usage)
